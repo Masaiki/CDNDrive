@@ -3,10 +3,11 @@ from os import path
 import sys
 import threading
 import time
+import json
 from concurrent.futures import ThreadPoolExecutor
-from drivers import *
-from encoders import *
-from util import *
+from drivers import drivers, prefixes
+from encoders import encoders
+from util import calc_sha1, size_string, read_in_chunk, block_offset
 
 from PyQt5 import QtWidgets
 from PyQt5.QtCore import pyqtSignal
@@ -14,7 +15,6 @@ from UI import Ui_MainWindow
 
 encoder = None
 api = None
-nblocks = 0
 lock = threading.Lock()
 
 
@@ -80,6 +80,10 @@ class MainWindow(QtWidgets.QMainWindow, Ui_MainWindow):
     def log(self, message):
         self.logText.appendPlainText(message)
 
+    def ask_overwrite(self):
+        answer = QtWidgets.QMessageBox.question(self, '确认', '文件已存在, 是否覆盖?', QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No)
+        return answer == QtWidgets.QMessageBox.Yes
+
     def tr_download(self, i, block_dict, f, offset):
         url = block_dict['url']
         for j in range(10):
@@ -116,7 +120,7 @@ class MainWindow(QtWidgets.QMainWindow, Ui_MainWindow):
             if path.getsize(file_name) == meta_dict['size'] and calc_sha1(read_in_chunk(file_name)) == meta_dict['sha1']:
                 self.push_message_signal.emit("文件已存在, 且与服务器端内容一致")
                 return file_name
-            if not self.force and not ask_overwrite():
+            if not self.force and not self.ask_overwrite():
                 return
 
         self.push_message_signal.emit(f"线程数: {self.thread}")
