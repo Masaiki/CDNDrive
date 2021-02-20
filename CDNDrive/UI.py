@@ -53,7 +53,7 @@ class Ui_MainWindow(object):
 
     def retranslateUi(self, MainWindow):
         _translate = QtCore.QCoreApplication.translate
-        MainWindow.setWindowTitle(_translate("CDNdrive - GUI", "CDNdrive - GUI"))
+        MainWindow.setWindowTitle(_translate("CDNDrive - GUI", "CDNDrive - GUI"))
         self.plainTextEdit.setPlaceholderText(_translate("Links: seperated by enter", "链接：以回车分隔多个链接"))
         self.downloadStartButton.setText(_translate("Download", "下载"))
         self.clearInputButton.setText(_translate("Clear", "清空"))
