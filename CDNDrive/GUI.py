@@ -62,11 +62,13 @@ class MainWindow(QtWidgets.QMainWindow, Ui_MainWindow):
 
     def download_handle(self):
         self.progressBar.setValue(0)
+        self.downloadStartButton.setEnabled(False)
+        self.downloadPauseResumeButton.setEnabled(True)
+        self.downloadStopButton.setEnabled(True)
         self.not_paused.set()
         self.stopped.clear()
         links = self.plainTextEdit.toPlainText()
         links = links.replace('\r\n', '\n').strip().split('\n')
-        self.downloadStartButton.setEnabled(False)
         self.t = threading.Thread(target=self.download_handle_inner, args=(links,))
         self.t.start()
 
@@ -85,6 +87,7 @@ class MainWindow(QtWidgets.QMainWindow, Ui_MainWindow):
             self.not_paused.set()
             self.downloadPauseResumeButton.setText('暂停')
         self.stopped.set()
+        self.succ = False
         self.push_message_signal.emit("下载任务被停止")
 
     def download_pause_resume_handle(self):
@@ -99,6 +102,8 @@ class MainWindow(QtWidgets.QMainWindow, Ui_MainWindow):
 
     def download_done(self):
         self.downloadStartButton.setEnabled(True)
+        self.downloadPauseResumeButton.setEnabled(False)
+        self.downloadStopButton.setEnabled(False)
         self.t = None
 
     def log(self, message):
@@ -111,7 +116,9 @@ class MainWindow(QtWidgets.QMainWindow, Ui_MainWindow):
     def tr_download(self, i, block_dict, f, offset):
         self.not_paused.wait()
         if self.stopped.is_set():
-            return False
+            return
+        if not self.succ:
+            return
         url = block_dict['url']
         for j in range(10):
             block = api.image_download(url)
@@ -124,10 +131,11 @@ class MainWindow(QtWidgets.QMainWindow, Ui_MainWindow):
                     f.seek(offset)
                     f.write(block)
                 self.push_message_signal.emit(f"分块{i + 1}/{self.nblocks}下载完毕")
-                return True
+                return
             else:
                 self.push_message_signal.emit(f"分块{i + 1}/{self.nblocks}校验未通过")
-        return False
+        with lock:
+            self.succ = False
 
     def download_single_handle(self, meta):
 
@@ -151,6 +159,7 @@ class MainWindow(QtWidgets.QMainWindow, Ui_MainWindow):
                 return
 
         self.push_message_signal.emit(f"线程数: {self.thread}")
+        self.succ = True
         self.nblocks = len(meta_dict['block'])
         trpool = ThreadPoolExecutor(self.thread)
         hdls = []
@@ -162,8 +171,7 @@ class MainWindow(QtWidgets.QMainWindow, Ui_MainWindow):
                 hdl = trpool.submit(self.tr_download, i, block_dict, f, offset)
                 hdls.append(hdl)
             wait(hdls, return_when=ALL_COMPLETED)
-            results = [h.result() for h in hdls]
-            if results.count(True) != self.nblocks:
+            if not self.succ:
                 return
             f.truncate(meta_dict['size'])
         self.push_message_signal.emit(f"{path.basename(file_name)} ({size_string(meta_dict['size'])}) 下载完毕, 用时{time.time() - start_time:.1f}秒, 平均速度{size_string(meta_dict['size'] / (time.time() - start_time))}/s")
@@ -178,6 +186,8 @@ class MainWindow(QtWidgets.QMainWindow, Ui_MainWindow):
     def initUI(self):
         self.lineEdit.setReadOnly(True)
         self.logText.setReadOnly(True)
+        self.downloadPauseResumeButton.setEnabled(False)
+        self.downloadStopButton.setEnabled(False)
         self.selectDirectoryButton.clicked.connect(self.set_download_path)
         self.downloadStartButton.clicked.connect(self.download_handle)
         self.downloadPauseResumeButton.clicked.connect(self.download_pause_resume_handle)
