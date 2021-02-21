@@ -4,7 +4,7 @@ import sys
 import threading
 import time
 import json
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, wait, ALL_COMPLETED
 from drivers import drivers, prefixes
 from encoders import encoders
 from util import calc_sha1, size_string, read_in_chunk, block_offset
@@ -44,6 +44,8 @@ def fetch_meta(s):
 
 class MainWindow(QtWidgets.QMainWindow, Ui_MainWindow):
     t = None
+    not_paused = threading.Event()
+    stopped = threading.Event()
     push_message_signal = pyqtSignal(str)
     download_done_signal = pyqtSignal()
 
@@ -60,6 +62,8 @@ class MainWindow(QtWidgets.QMainWindow, Ui_MainWindow):
 
     def download_handle(self):
         self.progressBar.setValue(0)
+        self.not_paused.set()
+        self.stopped.clear()
         links = self.plainTextEdit.toPlainText()
         links = links.replace('\r\n', '\n').strip().split('\n')
         self.downloadStartButton.setEnabled(False)
@@ -69,9 +73,29 @@ class MainWindow(QtWidgets.QMainWindow, Ui_MainWindow):
     def download_handle_inner(self, links):
         all = len(links)
         for i, link in enumerate(links):
+            self.not_paused.wait()
+            if self.stopped.is_set():
+                break
             self.download_single_handle(link)
             self.progressBar.setValue((i+1)/all*100)
         self.download_done_signal.emit()
+
+    def download_stop_handle(self):
+        if not self.not_paused.is_set():
+            self.not_paused.set()
+            self.downloadPauseResumeButton.setText('暂停')
+        self.stopped.set()
+        self.push_message_signal.emit("下载任务被停止")
+
+    def download_pause_resume_handle(self):
+        if self.not_paused.is_set():
+            self.not_paused.clear()
+            self.downloadPauseResumeButton.setText('恢复')
+            self.push_message_signal.emit("下载任务被暂停")
+        else:
+            self.not_paused.set()
+            self.downloadPauseResumeButton.setText('暂停')
+            self.push_message_signal.emit("下载任务已恢复")
 
     def download_done(self):
         self.downloadStartButton.setEnabled(True)
@@ -85,6 +109,9 @@ class MainWindow(QtWidgets.QMainWindow, Ui_MainWindow):
         return answer == QtWidgets.QMessageBox.Yes
 
     def tr_download(self, i, block_dict, f, offset):
+        self.not_paused.wait()
+        if self.stopped.is_set():
+            return False
         url = block_dict['url']
         for j in range(10):
             block = api.image_download(url)
@@ -97,10 +124,10 @@ class MainWindow(QtWidgets.QMainWindow, Ui_MainWindow):
                     f.seek(offset)
                     f.write(block)
                 self.push_message_signal.emit(f"分块{i + 1}/{self.nblocks}下载完毕")
-                return
+                return True
             else:
                 self.push_message_signal.emit(f"分块{i + 1}/{self.nblocks}校验未通过")
-        self.succ = False
+        return False
 
     def download_single_handle(self, meta):
 
@@ -124,7 +151,6 @@ class MainWindow(QtWidgets.QMainWindow, Ui_MainWindow):
                 return
 
         self.push_message_signal.emit(f"线程数: {self.thread}")
-        self.succ = True
         self.nblocks = len(meta_dict['block'])
         trpool = ThreadPoolExecutor(self.thread)
         hdls = []
@@ -135,12 +161,11 @@ class MainWindow(QtWidgets.QMainWindow, Ui_MainWindow):
                 offset = block_offset(meta_dict, i)
                 hdl = trpool.submit(self.tr_download, i, block_dict, f, offset)
                 hdls.append(hdl)
-            for h in hdls:
-                h.result()
-            if not self.succ:
+            wait(hdls, return_when=ALL_COMPLETED)
+            results = [h.result() for h in hdls]
+            if results.count(True) != self.nblocks:
                 return
             f.truncate(meta_dict['size'])
-
         self.push_message_signal.emit(f"{path.basename(file_name)} ({size_string(meta_dict['size'])}) 下载完毕, 用时{time.time() - start_time:.1f}秒, 平均速度{size_string(meta_dict['size'] / (time.time() - start_time))}/s")
         sha1 = calc_sha1(read_in_chunk(file_name))
         if sha1 == meta_dict['sha1']:
@@ -155,6 +180,8 @@ class MainWindow(QtWidgets.QMainWindow, Ui_MainWindow):
         self.logText.setReadOnly(True)
         self.selectDirectoryButton.clicked.connect(self.set_download_path)
         self.downloadStartButton.clicked.connect(self.download_handle)
+        self.downloadPauseResumeButton.clicked.connect(self.download_pause_resume_handle)
+        self.downloadStopButton.clicked.connect(self.download_stop_handle)
         self.clearInputButton.clicked.connect(self.plainTextEdit.clear)
         self.push_message_signal.connect(self.log)
         self.download_done_signal.connect(self.download_done)
